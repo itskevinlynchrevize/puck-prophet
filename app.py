@@ -308,7 +308,9 @@ def api_parlay():
 # STARTUP
 # ============================================================
 
+# Initialize model on import (runs for both gunicorn and direct execution)
+initialize_model()
+
 if __name__ == "__main__":
-    initialize_model()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)

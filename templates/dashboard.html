@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NHL Predictions</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #06080f;
+            --surface: #0d1117;
+            --surface2: #161b22;
+            --border: #21262d;
+            --ice: #7dd3fc;
+            --ice-dim: #0c4a6e;
+            --ice-glow: rgba(125, 211, 252, 0.08);
+            --green: #34d399;
+            --green-dim: rgba(52, 211, 153, 0.12);
+            --red: #f87171;
+            --red-dim: rgba(248, 113, 113, 0.12);
+            --amber: #fbbf24;
+            --amber-dim: rgba(251, 191, 36, 0.12);
+            --text: #e6edf3;
+            --text2: #8b949e;
+            --text3: #484f58;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 0;
+        }
+
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(12px);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, var(--ice), #a5f3fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-sub {
+            font-size: 12px;
+            color: var(--text3);
+            font-weight: 400;
+        }
+
+        .accuracy-badge {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+        }
+
+        .accuracy-badge .number {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .accuracy-badge .label {
+            color: var(--text2);
+            font-size: 11px;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 24px 16px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 4px;
+            border: 1px solid var(--border);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text2);
+            transition: all 0.2s;
+            border: none;
+            background: transparent;
+        }
+
+        .tab.active {
+            background: var(--ice-dim);
+            color: var(--ice);
+        }
+
+        .tab:hover:not(.active) {
+            color: var(--text);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Game Card */
+        .game-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s;
+        }
+
+        .game-card:hover {
+            border-color: var(--ice-dim);
+        }
+
+        .game-card.strong { border-left: 3px solid var(--green); }
+        .game-card.lean { border-left: 3px solid var(--ice); }
+        .game-card.slight { border-left: 3px solid var(--text3); }
+        .game-card.tossup { border-left: 3px solid var(--text3); opacity: 0.7; }
+
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+
+        .matchup {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .matchup .at { color: var(--text3); font-weight: 400; margin: 0 6px; }
+
+        .tier-badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .tier-STRONG { background: var(--green-dim); color: var(--green); }
+        .tier-LEAN { background: var(--ice-glow); color: var(--ice); }
+        .tier-SLIGHT { background: var(--surface2); color: var(--text2); }
+        .tier-TOSSUP { background: var(--surface2); color: var(--text3); }
+
+        .pick-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .pick-team {
+            font-size: 28px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--ice);
+        }
+
+        .pick-conf {
+            font-size: 24px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .pick-conf.high { color: var(--green); }
+        .pick-conf.mid { color: var(--ice); }
+        .pick-conf.low { color: var(--text2); }
+
+        .puck-line {
+            font-size: 12px;
+            color: var(--amber);
+            background: var(--amber-dim);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .puck-line.skip { color: var(--text3); background: var(--surface2); }
+
+        .game-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .team-stat {
+            background: var(--surface2);
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+
+        .team-stat .team-name {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .team-stat .record {
+            color: var(--text2);
+            font-weight: 400;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text2);
+            margin-bottom: 2px;
+        }
+
+        .stat-row .val {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text);
+        }
+
+        /* Results */
+        .result-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 18px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .result-card.correct { border-left: 3px solid var(--green); background: rgba(52, 211, 153, 0.04); }
+        .result-card.wrong { border-left: 3px solid var(--red); background: rgba(248, 113, 113, 0.04); }
+        .result-card.no-pred { opacity: 0.5; }
+
+        .result-matchup {
+            font-weight: 600;
+            font-size: 15px;
+            color: var(--text);
+        }
+
+        .result-score {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 500;
+            margin-top: 2px;
+        }
+
+        .result-icon {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; font-weight: 700;
+        }
+
+        .result-icon.correct { background: var(--green-dim); color: var(--green); }
+        .result-icon.wrong { background: var(--red-dim); color: var(--red); }
+
+        /* Accuracy Section */
+        .accuracy-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .acc-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .acc-card .acc-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+        .acc-card .acc-number { font-size: 28px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+        .acc-card .acc-sub { font-size: 11px; color: var(--text3); margin-top: 4px; }
+
+        /* Parlay */
+        .parlay-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 24px;
+        }
+
+        .parlay-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+
+        .parlay-leg {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: var(--surface2);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .parlay-leg:hover { background: var(--ice-glow); }
+        .parlay-leg.selected { background: var(--ice-glow); border: 1px solid var(--ice-dim); }
+
+        .parlay-checkbox {
+            width: 20px; height: 20px;
+            border-radius: 4px;
+            border: 2px solid var(--text3);
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .parlay-leg.selected .parlay-checkbox {
+            background: var(--ice);
+            border-color: var(--ice);
+            color: var(--bg);
+        }
+
+        .parlay-result {
+            background: var(--surface2);
+            border-radius: 10px;
+            padding: 16px;
+            margin-top: 16px;
+            text-align: center;
+            display: none;
+        }
+
+        .parlay-result.visible { display: block; }
+
+        .parlay-prob {
+            font-size: 32px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--ice);
+        }
+
+        .parlay-odds {
+            font-size: 14px;
+            color: var(--text2);
+            margin-top: 4px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text3);
+        }
+
+        .spinner {
+            width: 24px; height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--ice);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Empty state */
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text3);
+        }
+
+        .empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+        .div-badge {
+            font-size: 10px;
+            background: var(--amber-dim);
+            color: var(--amber);
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+            font-weight: 500;
+        }
+
+        /* Mobile */
+        @media (max-width: 640px) {
+            .header { padding: 12px 16px; flex-direction: column; gap: 8px; }
+            .game-details { grid-template-columns: 1fr; }
+            .accuracy-badge { display: none; }
+            .matchup { font-size: 16px; }
+            .pick-team { font-size: 22px; }
+            .pick-conf { font-size: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <div class="logo">PUCK PROPHET</div>
+        <div class="header-sub">NHL Prediction Model</div>
+    </div>
+    <div class="accuracy-badge" id="header-accuracy">
+        <div>
+            <div class="label">Season Record</div>
+            <div class="number" id="header-record">—</div>
+        </div>
+        <div>
+            <div class="label">Accuracy</div>
+            <div class="number" id="header-pct">—</div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="tabs">
+        <button class="tab active" data-tab="tonight">Tonight</button>
+        <button class="tab" data-tab="results">Results</button>
+        <button class="tab" data-tab="accuracy">Accuracy</button>
+        <button class="tab" data-tab="parlay">Parlay</button>
+    </div>
+
+    <!-- TONIGHT -->
+    <div class="tab-content active" id="tab-tonight">
+        <div class="loading" id="tonight-loading">
+            <div class="spinner"></div>
+            Loading predictions...
+        </div>
+        <div id="tonight-games"></div>
+    </div>
+
+    <!-- RESULTS -->
+    <div class="tab-content" id="tab-results">
+        <div class="loading" id="results-loading">
+            <div class="spinner"></div>
+            Loading yesterday's results...
+        </div>
+        <div id="results-container"></div>
+    </div>
+
+    <!-- ACCURACY -->
+    <div class="tab-content" id="tab-accuracy">
+        <div class="loading" id="accuracy-loading">
+            <div class="spinner"></div>
+            Loading accuracy data...
+        </div>
+        <div id="accuracy-container"></div>
+    </div>
+
+    <!-- PARLAY -->
+    <div class="tab-content" id="tab-parlay">
+        <div class="parlay-section">
+            <div class="parlay-title">Parlay Builder</div>
+            <p style="font-size: 13px; color: var(--text2); margin-bottom: 16px;">
+                Select games to build a parlay. Combined probability updates in real time.
+            </p>
+            <div id="parlay-legs"></div>
+            <div class="parlay-result" id="parlay-result">
+                <div style="font-size: 12px; color: var(--text3); margin-bottom: 4px;">COMBINED PROBABILITY</div>
+                <div class="parlay-prob" id="parlay-prob">—</div>
+                <div class="parlay-odds" id="parlay-odds"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// TAB SWITCHING
+// ============================================================
+
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+
+        // Load data on first visit
+        if (tab.dataset.tab === 'results' && !resultsLoaded) loadResults();
+        if (tab.dataset.tab === 'accuracy' && !accuracyLoaded) loadAccuracy();
+        if (tab.dataset.tab === 'parlay' && !parlayLoaded) loadParlay();
+    });
+});
+
+let resultsLoaded = false;
+let accuracyLoaded = false;
+let parlayLoaded = false;
+let tonightPredictions = [];
+
+// ============================================================
+// TONIGHT'S PREDICTIONS
+// ============================================================
+
+async function loadTonight() {
+    try {
+        const resp = await fetch('/api/predictions/today');
+        const data = await resp.json();
+        document.getElementById('tonight-loading').style.display = 'none';
+
+        const container = document.getElementById('tonight-games');
+        tonightPredictions = data.predictions || [];
+
+        if (tonightPredictions.length === 0) {
+            container.innerHTML = `
+                <div class="empty">
+                    <div class="empty-icon">🏒</div>
+                    <div>No games scheduled for today</div>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = tonightPredictions.map(p => renderGameCard(p)).join('');
+    } catch (err) {
+        document.getElementById('tonight-loading').innerHTML = `<div class="empty">Error loading predictions</div>`;
+    }
+}
+
+function renderGameCard(p) {
+    const confClass = p.confidence >= 65 ? 'high' : p.confidence >= 55 ? 'mid' : 'low';
+    const tierClass = p.tier.toLowerCase();
+    const divBadge = p.divisional ? '<span class="div-badge">DIV</span>' : '';
+    const puckLine = p.puck_line
+        ? `<span class="puck-line">${p.puck_line} -1.5</span>`
+        : `<span class="puck-line skip">PUCK LINE: SKIP</span>`;
+
+    return `
+    <div class="game-card ${tierClass}">
+        <div class="game-header">
+            <div class="matchup">${p.away}<span class="at">@</span>${p.home}${divBadge}</div>
+            <span class="tier-badge tier-${p.tier}">${p.tier === 'STRONG' ? '★ ' : ''}${p.tier}</span>
+        </div>
+        <div class="pick-row">
+            <div class="pick-team">${p.pick}</div>
+            <div class="pick-conf ${confClass}">${p.confidence}%</div>
+            ${puckLine}
+        </div>
+        <div class="game-details">
+            <div class="team-stat">
+                <div class="team-name">
+                    ${p.home}
+                    <span class="record">${p.home_wins}W-${p.home_losses}L (${p.home_win_pct.toFixed(0)}%)</span>
+                </div>
+                <div class="stat-row"><span>GF/GA</span><span class="val">${p.home_gf.toFixed(2)} / ${p.home_ga.toFixed(2)}</span></div>
+                <div class="stat-row"><span>PK/gm</span><span class="val">${p.home_pk_pg.toFixed(1)}</span></div>
+                <div class="stat-row"><span>Rest</span><span class="val">${p.home_rest}d</span></div>
+                <div class="stat-row"><span>Goalie</span><span class="val">${p.home_goalie_name}</span></div>
+                <div class="stat-row"><span>SV%</span><span class="val">${p.home_goalie_sv.toFixed(3)} (${p.home_goalie_delta >= 0 ? '+' : ''}${p.home_goalie_delta.toFixed(1)}%)</span></div>
+            </div>
+            <div class="team-stat">
+                <div class="team-name">
+                    ${p.away}
+                    <span class="record">${p.away_wins}W-${p.away_losses}L (${p.away_win_pct.toFixed(0)}%)</span>
+                </div>
+                <div class="stat-row"><span>GF/GA</span><span class="val">${p.away_gf.toFixed(2)} / ${p.away_ga.toFixed(2)}</span></div>
+                <div class="stat-row"><span>PK/gm</span><span class="val">${p.away_pk_pg.toFixed(1)}</span></div>
+                <div class="stat-row"><span>Rest</span><span class="val">${p.away_rest}d</span></div>
+                <div class="stat-row"><span>Goalie</span><span class="val">${p.away_goalie_name}</span></div>
+                <div class="stat-row"><span>SV%</span><span class="val">${p.away_goalie_sv.toFixed(3)} (${p.away_goalie_delta >= 0 ? '+' : ''}${p.away_goalie_delta.toFixed(1)}%)</span></div>
+            </div>
+        </div>
+    </div>`;
+}
+
+// ============================================================
+// RESULTS
+// ============================================================
+
+async function loadResults() {
+    try {
+        const resp = await fetch('/api/results/yesterday');
+        const data = await resp.json();
+        document.getElementById('results-loading').style.display = 'none';
+        resultsLoaded = true;
+
+        const container = document.getElementById('results-container');
+        const results = data.results || [];
+
+        if (results.length === 0) {
+            container.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>No results yet</div>`;
+            return;
+        }
+
+        const summary = data.summary;
+        let html = '';
+        if (summary && summary.total > 0) {
+            html += `<div style="margin-bottom: 16px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; text-align: center;">
+                <span style="font-size: 14px; color: var(--text2);">Yesterday: </span>
+                <span style="font-family: 'JetBrains Mono'; font-weight: 700; font-size: 16px;">${summary.correct}/${summary.total} (${summary.accuracy}%)</span>
+            </div>`;
+        }
+
+        html += results.map(r => {
+            if (!r.predicted) {
+                return `<div class="result-card no-pred">
+                    <div><div class="result-matchup">${r.away} @ ${r.home}</div>
+                    <div class="result-score">${r.away_score} - ${r.home_score}</div></div>
+                    <div style="color: var(--text3); font-size: 12px;">No prediction</div>
+                </div>`;
+            }
+            const cls = r.correct ? 'correct' : 'wrong';
+            const pickColor = r.correct ? 'var(--green)' : 'var(--red)';
+            return `<div class="result-card ${cls}">
+                <div style="flex: 1;">
+                    <div class="result-matchup">${r.away} @ ${r.home}</div>
+                    <div class="result-score">Final: ${r.away_score} - ${r.home_score}  ·  Winner: ${r.actual_winner}</div>
+                </div>
+                <div style="text-align: right; margin-right: 12px;">
+                    <div style="font-size: 13px; color: ${pickColor}; font-weight: 600;">Picked ${r.pick} (${r.confidence}%)</div>
+                    <div style="font-size: 11px; color: var(--text2); margin-top: 2px;">${r.tier}</div>
+                </div>
+                <div class="result-icon ${cls}">${r.correct ? '✓' : '✗'}</div>
+            </div>`;
+        }).join('');
+
+        container.innerHTML = html;
+    } catch (err) {
+        document.getElementById('results-loading').innerHTML = `<div class="empty">Error loading results</div>`;
+    }
+}
+
+// ============================================================
+// ACCURACY
+// ============================================================
+
+async function loadAccuracy() {
+    try {
+        const resp = await fetch('/api/accuracy');
+        const data = await resp.json();
+        document.getElementById('accuracy-loading').style.display = 'none';
+        accuracyLoaded = true;
+
+        const container = document.getElementById('accuracy-container');
+        const overall = data.overall;
+        const recent = data.recent_7d;
+
+        // Update header
+        document.getElementById('header-record').textContent = `${overall.correct}/${overall.total}`;
+        document.getElementById('header-pct').textContent = overall.total > 0 ? `${overall.accuracy}%` : '—';
+
+        let html = `<div class="accuracy-grid">
+            <div class="acc-card">
+                <div class="acc-label">All Time</div>
+                <div class="acc-number" style="color: ${overall.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${overall.accuracy || '—'}%</div>
+                <div class="acc-sub">${overall.correct}/${overall.total}</div>
+            </div>
+            <div class="acc-card">
+                <div class="acc-label">Last 7 Days</div>
+                <div class="acc-number" style="color: ${recent.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${recent.accuracy || '—'}%</div>
+                <div class="acc-sub">${recent.correct}/${recent.total}</div>
+            </div>
+        </div>`;
+
+        // Daily log
+        if (data.daily_log && data.daily_log.length > 0) {
+            html += `<h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">Daily Log</h3>`;
+            html += data.daily_log.slice().reverse().map(d => `
+                <div style="display: flex; justify-content: space-between; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; font-size: 13px;">
+                    <span style="color: var(--text2);">${d.date}</span>
+                    <span style="font-family: 'JetBrains Mono'; color: ${d.accuracy >= 55 ? 'var(--green)' : d.accuracy < 45 ? 'var(--red)' : 'var(--text)'};">
+                        ${d.correct}/${d.total} (${d.accuracy}%)
+                    </span>
+                </div>`).join('');
+        } else {
+            html += `<div class="empty"><div class="empty-icon">📊</div>No accuracy data yet. Check back after predictions have been verified.</div>`;
+        }
+
+        container.innerHTML = html;
+    } catch (err) {
+        document.getElementById('accuracy-loading').innerHTML = `<div class="empty">Error loading accuracy</div>`;
+    }
+}
+
+// ============================================================
+// PARLAY
+// ============================================================
+
+let parlaySelections = new Set();
+
+async function loadParlay() {
+    parlayLoaded = true;
+    const container = document.getElementById('parlay-legs');
+
+    if (tonightPredictions.length === 0) {
+        container.innerHTML = `<div style="text-align: center; color: var(--text3); padding: 20px;">Load tonight's predictions first</div>`;
+        return;
+    }
+
+    container.innerHTML = tonightPredictions.map(p => `
+        <div class="parlay-leg" data-gameid="${p.game_id}" onclick="toggleParlay('${p.game_id}')">
+            <div class="parlay-checkbox" id="pcheck-${p.game_id}"></div>
+            <div style="flex: 1;">
+                <div style="font-weight: 600; font-size: 13px;">${p.away} @ ${p.home}</div>
+                <div style="font-size: 12px; color: var(--text2);">Pick: ${p.pick} (${p.confidence}%)</div>
+            </div>
+            <span class="tier-badge tier-${p.tier}" style="font-size: 10px;">${p.tier}</span>
+        </div>`).join('');
+}
+
+function toggleParlay(gameId) {
+    gameId = String(gameId);  // Ensure string
+    if (parlaySelections.has(gameId)) {
+        parlaySelections.delete(gameId);
+    } else {
+        parlaySelections.add(gameId);
+    }
+
+    // Update visual
+    document.querySelectorAll('.parlay-leg').forEach(leg => {
+        const gid = String(leg.dataset.gameid);
+        const selected = parlaySelections.has(gid);
+        leg.classList.toggle('selected', selected);
+        leg.querySelector('.parlay-checkbox').textContent = selected ? '✓' : '';
+    });
+
+    calculateParlay();
+}
+
+async function calculateParlay() {
+    const resultDiv = document.getElementById('parlay-result');
+
+    if (parlaySelections.size < 1) {
+        resultDiv.classList.remove('visible');
+        return;
+    }
+
+    // For single selections, show the individual probability
+    if (parlaySelections.size === 1) {
+        const gid = Array.from(parlaySelections)[0];
+        const pred = tonightPredictions.find(p => String(p.game_id) === gid);
+        if (pred) {
+            document.getElementById('parlay-prob').textContent = `${pred.confidence}%`;
+            document.getElementById('parlay-odds').textContent = `Single game — select more for a parlay`;
+            resultDiv.classList.add('visible');
+        }
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/parlay', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({game_ids: Array.from(parlaySelections)})
+        });
+        const data = await resp.json();
+
+        document.getElementById('parlay-prob').textContent = `${data.combined_probability}%`;
+        const oddsStr = data.fair_american_odds > 0 ? `+${data.fair_american_odds}` : `${data.fair_american_odds}`;
+        document.getElementById('parlay-odds').textContent = `Fair odds: ${oddsStr} (${data.leg_count} legs)`;
+        resultDiv.classList.add('visible');
+    } catch (err) {
+        resultDiv.classList.remove('visible');
+    }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+
+loadTonight();
+// Also pre-load accuracy for the header badge
+fetch('/api/accuracy').then(r => r.json()).then(data => {
+    const o = data.overall;
+    document.getElementById('header-record').textContent = o.total > 0 ? `${o.correct}/${o.total}` : '—';
+    document.getElementById('header-pct').textContent = o.total > 0 ? `${o.accuracy}%` : '—';
+}).catch(() => {});
+</script>
+
+</body>
+</html>

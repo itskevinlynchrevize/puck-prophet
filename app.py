@@ -6,13 +6,19 @@ from flask import Flask, render_template, jsonify, request
 from datetime import datetime, timedelta
 import os
 import json
+import time
 import threading
+import atexit
+import logging
 
 try:
     from zoneinfo import ZoneInfo
     EASTERN = ZoneInfo("America/New_York")
 except ImportError:
     EASTERN = None
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from engine import NHLModel, fetch_schedule, fetch_game_stats, fetch_probable_goalies, API_BASE
 
@@ -143,6 +149,124 @@ def initialize_model():
             save_predictions()
 
     print("  Model ready.")
+
+
+# ============================================================
+# DAILY CRON JOB
+# ============================================================
+
+def daily_refresh():
+    """Daily job: ingest new games, score yesterday's predictions, refresh cache.
+
+    Runs at 10am ET via APScheduler. Steps:
+      1. Fetch yesterday's completed games from the NHL API.
+      2. For each game not already ingested, pull stats and run through
+         train_on_game() so team/goalie stats stay current.
+      3. Score yesterday's predictions against actual results (accuracy log).
+      4. Clear today's prediction cache so fresh predictions generate.
+      5. Save model state and ingestion cache.
+    """
+    print(f"[CRON] daily_refresh starting at {eastern_now()}")
+
+    yesterday = eastern_yesterday()
+
+    # ---- 1. Ingest yesterday's games ---------------------
+    games = fetch_schedule(yesterday)
+    completed = [g for g in games if g["state"] in ["FINAL", "OFF"]]
+    print(f"[CRON] {len(completed)} completed games found for {yesterday}")
+
+    # Load ingestion cache
+    cache_path = os.path.join(DATA_DIR, "ingested_games.json")
+    ingested_ids = set()
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                ingested_ids = set(json.load(f))
+    except Exception:
+        pass
+
+    import pandas as pd
+
+    new_ingested = 0
+    for game in completed:
+        gid = game["game_id"]
+        if str(gid) in ingested_ids or gid in ingested_ids:
+            continue
+
+        try:
+            time.sleep(0.8)
+            stats = fetch_game_stats(gid)
+            if stats:
+                stats["home_team"] = game["home_team"]
+                stats["away_team"] = game["away_team"]
+                stats["date"] = pd.Timestamp(yesterday)
+                stats["home_rest"] = model.get_rest_days(game["home_team"])
+                stats["away_rest"] = model.get_rest_days(game["away_team"])
+
+                model.train_on_game(stats, base_lr=0.012)
+                ingested_ids.add(str(gid))
+                new_ingested += 1
+        except Exception as e:
+            print(f"[CRON] Error ingesting game {gid}: {e}")
+
+    # Save updated ingestion cache
+    if new_ingested > 0:
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(sorted(ingested_ids), f)
+        except Exception as e:
+            print(f"[CRON] Warning: could not save ingestion cache: {e}")
+
+    print(f"[CRON] Ingested {new_ingested} new games")
+
+    # ---- 2. Score yesterday's predictions ----------------
+    already_logged = any(d["date"] == yesterday for d in accuracy_log)
+
+    if not already_logged and completed:
+        yesterday_preds = predictions_cache.get(yesterday, [])
+        pred_map = {p["game_id"]: p for p in yesterday_preds if "game_id" in p}
+
+        day_correct = 0
+        day_total = 0
+        for game in completed:
+            gid = game["game_id"]
+            if gid not in pred_map:
+                continue
+            home_score = game.get("home_score")
+            away_score = game.get("away_score")
+            if home_score is None or away_score is None:
+                continue
+
+            actual_winner = game["home_team"] if home_score > away_score else game["away_team"]
+            pred = pred_map[gid]
+            if pred["pick"] == actual_winner:
+                day_correct += 1
+            day_total += 1
+
+        if day_total > 0:
+            accuracy_log.append({
+                "date": yesterday,
+                "correct": day_correct,
+                "total": day_total,
+                "accuracy": round(day_correct / day_total * 100, 1),
+            })
+            save_accuracy()
+            print(f"[CRON] Accuracy logged for {yesterday}: {day_correct}/{day_total}")
+        else:
+            print(f"[CRON] No predictions to score for {yesterday}")
+    elif already_logged:
+        print(f"[CRON] Accuracy for {yesterday} already logged, skipping")
+
+    # ---- 3. Clear today's cached predictions -------------
+    today = eastern_today()
+    if today in predictions_cache:
+        del predictions_cache[today]
+        save_predictions()
+        print(f"[CRON] Cleared prediction cache for {today}")
+
+    # ---- 4. Save model state -----------------------------
+    model.save_state(get_state_path())
+    print(f"[CRON] daily_refresh complete at {eastern_now()}")
 
 
 # ============================================================
@@ -343,8 +467,9 @@ def api_yesterday():
 
         results.append(result)
 
-    # Log accuracy
-    if day_total > 0:
+    # Log accuracy (skip if already logged by cron or a previous request)
+    already_logged = any(d["date"] == yesterday for d in accuracy_log)
+    if day_total > 0 and not already_logged:
         accuracy_log.append({
             "date": yesterday,
             "correct": day_correct,
@@ -398,6 +523,16 @@ def api_accuracy():
 def api_weights():
     """Get current model weights."""
     return jsonify({"weights": model.get_weights()})
+
+
+@app.route("/api/refresh", methods=["POST"])
+def api_manual_refresh():
+    """Manually trigger the daily refresh (same as the cron job)."""
+    try:
+        daily_refresh()
+        return jsonify({"status": "ok", "message": "Refresh complete"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 @app.route("/api/goalie/override", methods=["POST"])
@@ -464,6 +599,25 @@ def api_parlay():
 
 # Initialize model on import (runs for both gunicorn and direct execution)
 initialize_model()
+
+# Start daily scheduler
+# Guard: skip if running inside Flask's reloader child process
+if os.environ.get("WERKZEUG_RUN_MAIN") != "true" or not app.debug:
+    scheduler = BackgroundScheduler(daemon=True)
+
+    # 10:00 AM Eastern every day
+    if EASTERN:
+        trigger = CronTrigger(hour=10, minute=0, timezone=EASTERN)
+    else:
+        # Fallback: UTC 14:00 ≈ ET 10:00 (EDT) / 09:00 (EST)
+        trigger = CronTrigger(hour=14, minute=0)
+
+    scheduler.add_job(daily_refresh, trigger, id="daily_refresh",
+                      replace_existing=True, misfire_grace_time=3600)
+    scheduler.start()
+    print(f"  Scheduler started — daily_refresh at 10:00 AM ET")
+
+    atexit.register(lambda: scheduler.shutdown(wait=False))
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

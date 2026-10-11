@@ -244,6 +244,7 @@ class NHLModel:
             self.team_stats[t] = fresh_team_stats()
         self.goalie_stats = defaultdict(fresh_goalie_stats)
         self.last_game_date = {}
+        self.team_last_starter = {}
 
     def ensure_team(self, team):
         if team not in self.team_stats:

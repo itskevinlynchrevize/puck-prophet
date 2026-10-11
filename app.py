@@ -26,6 +26,7 @@ model = NHLModel()
 predictions_cache = {}  # date -> list of predictions
 results_cache = {}      # date -> list of results
 accuracy_log = []       # list of {date, correct, total}
+season_accuracy = {}    # season_label -> {correct, total, accuracy}
 
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -105,9 +106,21 @@ def initialize_model():
             print(f"  Training on {label}...")
             result = model.train_on_season(filepath, base_lr=lr, reset=True)
             print(f"    {result['accuracy']:.1f}% ({result['predictions']} predictions)")
+            season_accuracy[label] = {
+                "correct": result["correct"],
+                "total": result["predictions"],
+                "accuracy": result["accuracy"],
+            }
+
+    # Reset team/goalie stats so current season starts clean.
+    # Weights are preserved — only the per-team accumulators are wiped.
+    all_teams = list(model.team_stats.keys())
+    if all_teams:
+        print("  Resetting team stats for new season...")
+        model.reset_season_stats(all_teams)
 
     # Pull completed 2026-27 games from the NHL API
-    # This updates team stats, goalie names, rest days — all in one pass
+    # This rebuilds team stats, goalie names, rest days from scratch
     try:
         games_ingested = model.ingest_current_season(base_lr=0.012, data_dir=DATA_DIR)
         if games_ingested > 0:
@@ -290,20 +303,30 @@ def api_yesterday():
 @app.route("/api/accuracy")
 def api_accuracy():
     """Get rolling accuracy stats."""
-    total_correct = sum(d["correct"] for d in accuracy_log)
-    total_preds = sum(d["total"] for d in accuracy_log)
-    overall = round(total_correct/total_preds*100, 1) if total_preds > 0 else 0
+    # Live prediction accuracy (current season daily tracking)
+    live_correct = sum(d["correct"] for d in accuracy_log)
+    live_total = sum(d["total"] for d in accuracy_log)
 
-    # Last 7 days
+    # All-time: training seasons + live predictions
+    all_correct = sum(s["correct"] for s in season_accuracy.values()) + live_correct
+    all_total = sum(s["total"] for s in season_accuracy.values()) + live_total
+    all_acc = round(all_correct/all_total*100, 1) if all_total > 0 else 0
+
+    # Last season (2025-26)
+    last_season = season_accuracy.get("2025-26", {"correct": 0, "total": 0, "accuracy": 0})
+
+    # Last 7 days of live predictions
     recent = accuracy_log[-7:] if accuracy_log else []
     recent_correct = sum(d["correct"] for d in recent)
     recent_total = sum(d["total"] for d in recent)
     recent_acc = round(recent_correct/recent_total*100, 1) if recent_total > 0 else 0
 
     return jsonify({
-        "overall": {"correct": total_correct, "total": total_preds, "accuracy": overall},
+        "all_time": {"correct": all_correct, "total": all_total, "accuracy": all_acc},
+        "last_season": last_season,
         "recent_7d": {"correct": recent_correct, "total": recent_total, "accuracy": recent_acc},
         "daily_log": accuracy_log[-30:],
+        "seasons": season_accuracy,
     })
 
 

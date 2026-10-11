@@ -416,6 +416,72 @@
             font-weight: 500;
         }
 
+        /* Goalie Override */
+        .goalie-clickable {
+            cursor: pointer;
+            position: relative;
+            transition: color 0.2s;
+        }
+
+        .goalie-clickable:hover .val {
+            color: var(--ice);
+            text-decoration: underline;
+        }
+
+        .goalie-dropdown {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            z-index: 50;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 4px;
+            min-width: 220px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            margin-top: 4px;
+        }
+
+        .goalie-dropdown.open { display: block; }
+
+        .goalie-option {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.15s;
+        }
+
+        .goalie-option:hover { background: var(--surface2); }
+
+        .goalie-option.active {
+            background: var(--ice-glow);
+            color: var(--ice);
+        }
+
+        .goalie-option .goalie-name { font-weight: 500; }
+
+        .goalie-option .goalie-stats {
+            color: var(--text3);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        }
+
+        .goalie-override-badge {
+            font-size: 9px;
+            background: var(--amber-dim);
+            color: var(--amber);
+            padding: 1px 5px;
+            border-radius: 3px;
+            margin-left: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
         /* Mobile */
         @media (max-width: 640px) {
             .header { padding: 12px 16px; flex-direction: column; gap: 8px; }
@@ -557,9 +623,11 @@ function renderGameCard(p) {
     const puckLine = p.puck_line
         ? `<span class="puck-line">${p.puck_line} -1.5</span>`
         : `<span class="puck-line skip">PUCK LINE: SKIP</span>`;
+    const homeOverride = p.home_goalie_override ? '<span class="goalie-override-badge">manual</span>' : '';
+    const awayOverride = p.away_goalie_override ? '<span class="goalie-override-badge">manual</span>' : '';
 
     return `
-    <div class="game-card ${tierClass}">
+    <div class="game-card ${tierClass}" id="card-${p.game_id}">
         <div class="game-header">
             <div class="matchup">${p.away}<span class="at">@</span>${p.home}${divBadge}</div>
             <span class="tier-badge tier-${p.tier}">${p.tier === 'STRONG' ? '★ ' : ''}${p.tier}</span>
@@ -578,7 +646,10 @@ function renderGameCard(p) {
                 <div class="stat-row"><span>GF/GA</span><span class="val">${p.home_gf.toFixed(2)} / ${p.home_ga.toFixed(2)}</span></div>
                 <div class="stat-row"><span>PK/gm</span><span class="val">${p.home_pk_pg.toFixed(1)}</span></div>
                 <div class="stat-row"><span>Rest</span><span class="val">${p.home_rest}d</span></div>
-                <div class="stat-row"><span>Goalie</span><span class="val">${p.home_goalie_name}</span></div>
+                <div class="stat-row goalie-clickable" onclick="openGoalieDropdown(event, '${p.game_id}', '${p.home}', 'home')">
+                    <span>Goalie ▾</span><span class="val">${p.home_goalie_name}${homeOverride}</span>
+                    <div class="goalie-dropdown" id="gdrop-${p.game_id}-home"></div>
+                </div>
                 <div class="stat-row"><span>SV%</span><span class="val">${p.home_goalie_sv.toFixed(3)} (${p.home_goalie_delta >= 0 ? '+' : ''}${p.home_goalie_delta.toFixed(1)}%)</span></div>
             </div>
             <div class="team-stat">
@@ -589,7 +660,10 @@ function renderGameCard(p) {
                 <div class="stat-row"><span>GF/GA</span><span class="val">${p.away_gf.toFixed(2)} / ${p.away_ga.toFixed(2)}</span></div>
                 <div class="stat-row"><span>PK/gm</span><span class="val">${p.away_pk_pg.toFixed(1)}</span></div>
                 <div class="stat-row"><span>Rest</span><span class="val">${p.away_rest}d</span></div>
-                <div class="stat-row"><span>Goalie</span><span class="val">${p.away_goalie_name}</span></div>
+                <div class="stat-row goalie-clickable" onclick="openGoalieDropdown(event, '${p.game_id}', '${p.away}', 'away')">
+                    <span>Goalie ▾</span><span class="val">${p.away_goalie_name}${awayOverride}</span>
+                    <div class="goalie-dropdown" id="gdrop-${p.game_id}-away"></div>
+                </div>
                 <div class="stat-row"><span>SV%</span><span class="val">${p.away_goalie_sv.toFixed(3)} (${p.away_goalie_delta >= 0 ? '+' : ''}${p.away_goalie_delta.toFixed(1)}%)</span></div>
             </div>
         </div>
@@ -817,6 +891,111 @@ async function calculateParlay() {
         resultDiv.classList.add('visible');
     } catch (err) {
         resultDiv.classList.remove('visible');
+    }
+}
+
+// ============================================================
+// GOALIE OVERRIDE
+// ============================================================
+
+let activeDropdown = null;
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    if (activeDropdown && !e.target.closest('.goalie-clickable')) {
+        activeDropdown.classList.remove('open');
+        activeDropdown = null;
+    }
+});
+
+async function openGoalieDropdown(event, gameId, team, side) {
+    event.stopPropagation();
+    const dropId = `gdrop-${gameId}-${side}`;
+    const dropdown = document.getElementById(dropId);
+
+    // Close any other open dropdown
+    if (activeDropdown && activeDropdown !== dropdown) {
+        activeDropdown.classList.remove('open');
+    }
+
+    // Toggle this dropdown
+    if (dropdown.classList.contains('open')) {
+        dropdown.classList.remove('open');
+        activeDropdown = null;
+        return;
+    }
+
+    // Fetch goalies for this team
+    dropdown.innerHTML = '<div style="padding: 8px; color: var(--text3); font-size: 12px;">Loading...</div>';
+    dropdown.classList.add('open');
+    activeDropdown = dropdown;
+
+    try {
+        const resp = await fetch(`/api/goalies/${team}`);
+        const data = await resp.json();
+        const goalies = data.goalies || [];
+
+        if (goalies.length === 0) {
+            dropdown.innerHTML = '<div style="padding: 8px; color: var(--text3); font-size: 12px;">No goalies found</div>';
+            return;
+        }
+
+        // Find current goalie name from prediction
+        const pred = tonightPredictions.find(p => String(p.game_id) === String(gameId));
+        const currentName = pred ? (side === 'home' ? pred.home_goalie_name : pred.away_goalie_name) : '';
+
+        dropdown.innerHTML = goalies.map(g => {
+            const isActive = g.name === currentName;
+            return `<div class="goalie-option ${isActive ? 'active' : ''}"
+                         onclick="selectGoalie(event, '${gameId}', '${side}', ${g.goalie_id})">
+                <span class="goalie-name">${g.name}${g.is_starter ? ' ★' : ''}</span>
+                <span class="goalie-stats">${g.sv_pct.toFixed(3)} · ${g.wins}W · ${g.games}GP</span>
+            </div>`;
+        }).join('');
+    } catch (err) {
+        dropdown.innerHTML = '<div style="padding: 8px; color: var(--red); font-size: 12px;">Error loading goalies</div>';
+    }
+}
+
+async function selectGoalie(event, gameId, side, goalieId) {
+    event.stopPropagation();
+
+    // Close dropdown
+    if (activeDropdown) {
+        activeDropdown.classList.remove('open');
+        activeDropdown = null;
+    }
+
+    // Show loading state on the card
+    const card = document.getElementById(`card-${gameId}`);
+    if (card) card.style.opacity = '0.6';
+
+    try {
+        const resp = await fetch('/api/goalie/override', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({game_id: gameId, side: side, goalie_id: goalieId})
+        });
+        const data = await resp.json();
+
+        if (data.status === 'ok' && data.prediction) {
+            // Update the prediction in our local array
+            const idx = tonightPredictions.findIndex(p => String(p.game_id) === String(gameId));
+            if (idx >= 0) {
+                tonightPredictions[idx] = data.prediction;
+            }
+
+            // Re-render just this card
+            if (card) {
+                card.outerHTML = renderGameCard(data.prediction);
+            }
+        } else {
+            alert(data.message || 'Override failed');
+            if (card) card.style.opacity = '1';
+        }
+    } catch (err) {
+        alert('Error applying goalie override');
+        if (card) card.style.opacity = '1';
     }
 }
 

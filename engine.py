@@ -235,6 +235,7 @@ class NHLModel:
         self.goalie_names = {}
         self.last_game_date = {}
         self.team_last_starter = {}   # team -> goalie_id (most recent starter)
+        self.team_goalies = defaultdict(set)  # team -> set of goalie_ids who have played
         self.reg_lambda = 0.002
         self.min_games = 10
 
@@ -245,6 +246,7 @@ class NHLModel:
         self.goalie_stats = defaultdict(fresh_goalie_stats)
         self.last_game_date = {}
         self.team_last_starter = {}
+        self.team_goalies = defaultdict(set)
 
     def ensure_team(self, team):
         if team not in self.team_stats:
@@ -362,11 +364,13 @@ class NHLModel:
         if away_gid and pd.notna(row.get("away_starter_name")) and str(row["away_starter_name"]).strip():
             self.goalie_names[away_gid] = str(row["away_starter_name"]).strip()
 
-        # Track most recent starter per team
+        # Track most recent starter per team + roster of goalies
         if home_gid:
             self.team_last_starter[home] = home_gid
+            self.team_goalies[home].add(home_gid)
         if away_gid:
             self.team_last_starter[away] = away_gid
+            self.team_goalies[away].add(away_gid)
 
         home_rest = row.get("home_rest", 3)
         away_rest = row.get("away_rest", 3)

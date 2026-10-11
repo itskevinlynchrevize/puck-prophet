@@ -535,12 +535,110 @@ def api_manual_refresh():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route("/api/goalies/<team>")
+def api_goalies_for_team(team):
+    """List known goalies for a team with their stats."""
+    team = team.upper()
+    goalie_ids = model.team_goalies.get(team, set())
+
+    goalies = []
+    for gid in goalie_ids:
+        gs = model.goalie_stats.get(gid, {})
+        games = gs.get("games", 0)
+        if games == 0:
+            continue
+        sa = gs.get("shots_against", 0)
+        sv_pct = gs.get("saves", 0) / sa if sa > 0 else 0
+        goalies.append({
+            "goalie_id": gid,
+            "name": model.goalie_names.get(gid, "Unknown"),
+            "games": games,
+            "wins": gs.get("wins", 0),
+            "sv_pct": round(sv_pct, 3),
+            "goals_against": gs.get("goals_against", 0),
+            "is_starter": model.team_last_starter.get(team) == gid,
+        })
+
+    # Sort: most recent starter first, then by games played
+    goalies.sort(key=lambda g: (-g["is_starter"], -g["games"]))
+    return jsonify({"team": team, "goalies": goalies})
+
+
 @app.route("/api/goalie/override", methods=["POST"])
 def api_goalie_override():
     """Manually set a starting goalie and recalculate prediction."""
     data = request.json
-    # TODO: implement goalie override recalculation
-    return jsonify({"status": "ok", "message": "Goalie override not yet implemented"})
+    game_id = data.get("game_id")
+    side = data.get("side")          # "home" or "away"
+    goalie_id = data.get("goalie_id")
+
+    if not game_id or not side or goalie_id is None:
+        return jsonify({"status": "error", "message": "game_id, side, and goalie_id required"}), 400
+
+    today = eastern_today()
+    today_preds = predictions_cache.get(today, [])
+
+    # Find the prediction for this game
+    pred_idx = None
+    for i, p in enumerate(today_preds):
+        if str(p.get("game_id")) == str(game_id):
+            pred_idx = i
+            break
+
+    if pred_idx is None:
+        return jsonify({"status": "error", "message": "Game not found in today's predictions"}), 404
+
+    old_pred = today_preds[pred_idx]
+    home = old_pred["home"]
+    away = old_pred["away"]
+
+    # Determine goalie IDs for recalculation
+    if side == "home":
+        home_gid = int(goalie_id)
+        away_gid = None
+        # Try to find the away goalie from the original prediction
+        for gid, name in model.goalie_names.items():
+            if name == old_pred.get("away_goalie_name"):
+                away_gid = gid
+                break
+        if away_gid is None:
+            away_gid = model.get_likely_starter(away)
+    else:
+        away_gid = int(goalie_id)
+        home_gid = None
+        for gid, name in model.goalie_names.items():
+            if name == old_pred.get("home_goalie_name"):
+                home_gid = gid
+                break
+        if home_gid is None:
+            home_gid = model.get_likely_starter(home)
+
+    # Recalculate
+    new_pred = model.predict(
+        home, away,
+        old_pred["home_rest"], old_pred["away_rest"],
+        home_gid, away_gid
+    )
+
+    if not new_pred:
+        return jsonify({"status": "error", "message": "Could not recalculate prediction"}), 500
+
+    # Preserve metadata from original
+    new_pred["game_id"] = old_pred["game_id"]
+    new_pred["start_time"] = old_pred.get("start_time", "")
+
+    # Mark which side was overridden
+    if side == "home":
+        new_pred["home_goalie_override"] = True
+    else:
+        new_pred["away_goalie_override"] = True
+
+    # Update cache
+    today_preds[pred_idx] = new_pred
+    predictions_cache[today] = today_preds
+    save_predictions()
+
+    return jsonify({"status": "ok", "prediction": new_pred})
 
 
 @app.route("/api/parlay", methods=["POST"])

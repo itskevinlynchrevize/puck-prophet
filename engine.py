@@ -11,6 +11,12 @@ import json
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 
+try:
+    from zoneinfo import ZoneInfo
+    EASTERN = ZoneInfo("America/New_York")
+except ImportError:
+    EASTERN = None
+
 API_BASE = "https://api-web.nhle.com/v1"
 
 DIVISIONS = {
@@ -159,6 +165,50 @@ def fetch_game_stats(game_id):
         return None
 
 
+def fetch_probable_goalies(game_id):
+    """Try to get probable goalie starters from the NHL API landing page."""
+    try:
+        resp = requests.get(f"{API_BASE}/gamecenter/{game_id}/landing", timeout=15)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+
+        result = {}
+
+        # Try matchup.goalieComparison for pre-game data
+        matchup = data.get("matchup", {})
+        gc = matchup.get("goalieComparison", {})
+
+        for side, prefix in [("homeTeam", "home"), ("awayTeam", "away")]:
+            team_g = gc.get(side, {})
+            gid = None
+            name = ""
+
+            if isinstance(team_g, dict):
+                gid = team_g.get("playerId")
+                fn = team_g.get("firstName", {})
+                ln = team_g.get("lastName", {})
+                fn_str = fn.get("default", "") if isinstance(fn, dict) else str(fn)
+                ln_str = ln.get("default", "") if isinstance(ln, dict) else str(ln)
+                name = f"{fn_str} {ln_str}".strip()
+            elif isinstance(team_g, list) and team_g:
+                g = team_g[0]
+                gid = g.get("playerId")
+                fn = g.get("firstName", {})
+                ln = g.get("lastName", {})
+                fn_str = fn.get("default", "") if isinstance(fn, dict) else str(fn)
+                ln_str = ln.get("default", "") if isinstance(ln, dict) else str(ln)
+                name = f"{fn_str} {ln_str}".strip()
+
+            if gid:
+                result[f"{prefix}_goalie_id"] = gid
+                result[f"{prefix}_goalie_name"] = name
+
+        return result if result else None
+    except:
+        return None
+
+
 # ============================================================
 # MODEL
 # ============================================================
@@ -181,6 +231,7 @@ class NHLModel:
         self.goalie_stats = defaultdict(fresh_goalie_stats)
         self.goalie_names = {}
         self.last_game_date = {}
+        self.team_last_starter = {}   # team -> goalie_id (most recent starter)
         self.reg_lambda = 0.002
         self.min_games = 10
 
@@ -307,6 +358,12 @@ class NHLModel:
         if away_gid and pd.notna(row.get("away_starter_name")) and str(row["away_starter_name"]).strip():
             self.goalie_names[away_gid] = str(row["away_starter_name"]).strip()
 
+        # Track most recent starter per team
+        if home_gid:
+            self.team_last_starter[home] = home_gid
+        if away_gid:
+            self.team_last_starter[away] = away_gid
+
         home_rest = row.get("home_rest", 3)
         away_rest = row.get("away_rest", 3)
 
@@ -413,27 +470,104 @@ class NHLModel:
         acc = correct/total*100 if total > 0 else 0
         return {"accuracy": acc, "predictions": total, "correct": correct}
 
-    def get_rest_days(self, team):
-        """Get days of rest for a team based on last known game."""
+    def ingest_current_season(self, base_lr=0.012):
+        """Pull completed current-season games from the NHL API.
+
+        After training on historical CSVs, this fetches any games played
+        so far in the current season and feeds them through train_on_game().
+        This updates team stats, goalie stats/names, last_game_date, and
+        team_last_starter — fixing rest days and goalie display in one shot.
+
+        Does NOT reset stats: the 2025-26 accumulated stats serve as a
+        prior that gradually gets updated by new games. This is the right
+        behavior for early season when sample size is small.
+        """
+        from datetime import date as date_type
+
+        if EASTERN:
+            today = datetime.now(EASTERN).date()
+        else:
+            today = datetime.now().date()
+
+        # NHL regular season starts early October
+        if today.month >= 8:
+            season_start = date_type(today.year, 10, 1)
+        else:
+            season_start = date_type(today.year - 1, 10, 1)
+
+        yesterday = today - timedelta(days=1)
+
+        if season_start > yesterday:
+            print("  Current season hasn't started yet.")
+            return 0
+
+        games_ingested = 0
+        current = season_start
+
+        print(f"  Ingesting current season: {season_start} to {yesterday}...")
+
+        while current <= yesterday:
+            date_str = current.strftime("%Y-%m-%d")
+            games = fetch_schedule(date_str)
+            completed = [g for g in games if g["state"] in ["FINAL", "OFF"]]
+
+            for game in completed:
+                try:
+                    stats = fetch_game_stats(game["game_id"])
+                    if stats:
+                        # Add fields that train_on_game expects
+                        stats["home_team"] = game["home_team"]
+                        stats["away_team"] = game["away_team"]
+                        stats["date"] = pd.Timestamp(date_str)
+                        stats["home_rest"] = self.get_rest_days(
+                            game["home_team"], reference_date=current)
+                        stats["away_rest"] = self.get_rest_days(
+                            game["away_team"], reference_date=current)
+
+                        self.train_on_game(stats, base_lr=base_lr)
+                        games_ingested += 1
+                except Exception as e:
+                    print(f"    Error ingesting game {game['game_id']}: {e}")
+
+            current += timedelta(days=1)
+
+        print(f"  Ingested {games_ingested} current-season games.")
+        return games_ingested
+
+    def get_rest_days(self, team, reference_date=None):
+        """Get days of rest for a team based on last known game.
+
+        Args:
+            team: team abbreviation
+            reference_date: date to measure from (default: today Eastern).
+                            Accepts datetime.date, datetime.datetime, or
+                            pd.Timestamp.
+        """
         if team in self.last_game_date:
             last = self.last_game_date[team]
             if isinstance(last, str):
                 last = pd.to_datetime(last)
-            days = (datetime.now() - last).days
-            return min(days, 7)
+            # Convert to plain date for clean subtraction
+            if hasattr(last, 'date') and callable(last.date):
+                last_date = last.date()
+            else:
+                last_date = last
+
+            if reference_date is None:
+                if EASTERN:
+                    reference_date = datetime.now(EASTERN).date()
+                else:
+                    reference_date = datetime.now().date()
+            elif hasattr(reference_date, 'date') and callable(reference_date.date):
+                reference_date = reference_date.date()
+
+            days = (reference_date - last_date).days
+            return min(max(days, 0), 7)
         return 3
 
-    def get_likely_starter(self, team, df=None):
-        """Get most frequent recent starter for a team."""
-        starters = []
-        for gid, gs in self.goalie_stats.items():
-            # Check if this goalie plays for this team by looking at names
-            # This is approximate — in production we'd track team affiliation
-            pass
-
-        # Fallback: return the goalie with most games for this team
-        # We'd need team-goalie mapping for this to work perfectly
-        return None
+    def get_likely_starter(self, team):
+        """Get most recent starter for a team."""
+        return self.team_last_starter.get(team)
 
     def get_weights(self):
         """Return current weights for display."""

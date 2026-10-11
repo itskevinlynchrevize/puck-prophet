@@ -8,7 +8,13 @@ import os
 import json
 import threading
 
-from engine import NHLModel, fetch_schedule, fetch_game_stats, API_BASE
+try:
+    from zoneinfo import ZoneInfo
+    EASTERN = ZoneInfo("America/New_York")
+except ImportError:
+    EASTERN = None
+
+from engine import NHLModel, fetch_schedule, fetch_game_stats, fetch_probable_goalies, API_BASE
 
 app = Flask(__name__)
 
@@ -24,6 +30,29 @@ accuracy_log = []       # list of {date, correct, total}
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
+# ============================================================
+# TIME HELPERS
+# ============================================================
+
+def eastern_now():
+    """Get current datetime in Eastern time."""
+    if EASTERN:
+        return datetime.now(EASTERN)
+    return datetime.now()
+
+def eastern_today():
+    """Get today's date string in Eastern time."""
+    return eastern_now().strftime("%Y-%m-%d")
+
+def eastern_yesterday():
+    """Get yesterday's date string in Eastern time."""
+    return (eastern_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+# ============================================================
+# PERSISTENCE HELPERS
+# ============================================================
 
 def get_state_path():
     return os.path.join(DATA_DIR, "model_state.json")
@@ -63,7 +92,7 @@ def load_accuracy():
 # ============================================================
 
 def initialize_model():
-    """Train model on available season data."""
+    """Train model on available season data, then ingest current season."""
     print("  Initializing model...")
 
     season_files = [
@@ -76,6 +105,15 @@ def initialize_model():
             print(f"  Training on {label}...")
             result = model.train_on_season(filepath, base_lr=lr, reset=True)
             print(f"    {result['accuracy']:.1f}% ({result['predictions']} predictions)")
+
+    # Pull completed 2026-27 games from the NHL API
+    # This updates team stats, goalie names, rest days — all in one pass
+    try:
+        games_ingested = model.ingest_current_season(base_lr=0.012)
+        if games_ingested > 0:
+            print(f"  Current season: {games_ingested} games ingested.")
+    except Exception as e:
+        print(f"  Warning: Could not ingest current season: {e}")
 
     model.save_state(get_state_path())
     load_predictions()
@@ -95,7 +133,7 @@ def dashboard():
 @app.route("/api/predictions/today")
 def api_today():
     """Get predictions for today's games."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = eastern_today()
 
     # Check cache first
     if today in predictions_cache:
@@ -114,8 +152,26 @@ def api_today():
         home_rest = model.get_rest_days(home)
         away_rest = model.get_rest_days(away)
 
-        # Get likely starters (would be overridden by manual input)
+        # Try to get probable starters from the API
         home_gid = None; away_gid = None
+        try:
+            goalies = fetch_probable_goalies(game["game_id"])
+            if goalies:
+                home_gid = goalies.get("home_goalie_id")
+                away_gid = goalies.get("away_goalie_id")
+                # Store names so compute_features can find them
+                if home_gid and goalies.get("home_goalie_name"):
+                    model.goalie_names[home_gid] = goalies["home_goalie_name"]
+                if away_gid and goalies.get("away_goalie_name"):
+                    model.goalie_names[away_gid] = goalies["away_goalie_name"]
+        except:
+            pass
+
+        # Fall back to most recent starter for each team
+        if not home_gid:
+            home_gid = model.get_likely_starter(home)
+        if not away_gid:
+            away_gid = model.get_likely_starter(away)
 
         pred = model.predict(home, away, home_rest, away_rest, home_gid, away_gid)
         if pred:
@@ -143,7 +199,7 @@ def api_predictions_by_date(date_str):
 @app.route("/api/results/yesterday")
 def api_yesterday():
     """Get yesterday's results and check predictions."""
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday = eastern_yesterday()
 
     # Fetch yesterday's completed games
     games = fetch_schedule(yesterday)
@@ -260,7 +316,7 @@ def api_parlay():
     data = request.json
     game_ids = data.get("game_ids", [])
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = eastern_today()
     today_preds = predictions_cache.get(today, [])
     # Build pred_map with both string and int keys to handle type mismatches
     pred_map = {}

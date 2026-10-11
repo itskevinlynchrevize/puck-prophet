@@ -220,6 +220,70 @@ def api_predictions_by_date(date_str):
     return jsonify({"date": date_str, "predictions": [], "message": "No predictions for this date"})
 
 
+@app.route("/api/results/today")
+def api_today_results():
+    """Get today's completed game results (no accuracy logging)."""
+    today = eastern_today()
+
+    games = fetch_schedule(today)
+    completed = [g for g in games if g["state"] in ["FINAL", "OFF"]]
+
+    if not completed:
+        return jsonify({"date": today, "results": [], "message": "No completed games yet today"})
+
+    today_preds = predictions_cache.get(today, [])
+    pred_map = {p["game_id"]: p for p in today_preds if "game_id" in p}
+
+    results = []
+    day_correct = 0
+    day_total = 0
+
+    for game in completed:
+        gid = game["game_id"]
+        home = game["home_team"]; away = game["away_team"]
+        home_score = game.get("home_score"); away_score = game.get("away_score")
+
+        if home_score is None or away_score is None:
+            continue
+
+        actual_winner = home if home_score > away_score else away
+        margin = abs(home_score - away_score)
+
+        result = {
+            "game_id": gid,
+            "home": home, "away": away,
+            "home_score": home_score, "away_score": away_score,
+            "actual_winner": actual_winner,
+            "margin": margin,
+        }
+
+        if gid in pred_map:
+            pred = pred_map[gid]
+            correct = pred["pick"] == actual_winner
+            result["predicted"] = True
+            result["pick"] = pred["pick"]
+            result["confidence"] = pred["confidence"]
+            result["tier"] = pred["tier"]
+            result["correct"] = correct
+
+            day_total += 1
+            if correct: day_correct += 1
+        else:
+            result["predicted"] = False
+
+        results.append(result)
+
+    return jsonify({
+        "date": today,
+        "results": results,
+        "summary": {
+            "correct": day_correct,
+            "total": day_total,
+            "accuracy": round(day_correct/day_total*100, 1) if day_total > 0 else None,
+        }
+    })
+
+
 @app.route("/api/results/yesterday")
 def api_yesterday():
     """Get yesterday's results and check predictions."""

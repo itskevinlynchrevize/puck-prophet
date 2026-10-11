@@ -467,7 +467,7 @@
     <div class="tab-content" id="tab-results">
         <div class="loading" id="results-loading">
             <div class="spinner"></div>
-            Loading yesterday's results...
+            Loading results...
         </div>
         <div id="results-container"></div>
     </div>
@@ -600,52 +600,79 @@ function renderGameCard(p) {
 // RESULTS
 // ============================================================
 
+function renderResultCards(results) {
+    return results.map(r => {
+        if (!r.predicted) {
+            return `<div class="result-card no-pred">
+                <div><div class="result-matchup">${r.away} @ ${r.home}</div>
+                <div class="result-score">${r.away_score} - ${r.home_score}</div></div>
+                <div style="color: var(--text3); font-size: 12px;">No prediction</div>
+            </div>`;
+        }
+        const cls = r.correct ? 'correct' : 'wrong';
+        const pickColor = r.correct ? 'var(--green)' : 'var(--red)';
+        return `<div class="result-card ${cls}">
+            <div style="flex: 1;">
+                <div class="result-matchup">${r.away} @ ${r.home}</div>
+                <div class="result-score">Final: ${r.away_score} - ${r.home_score}  ·  Winner: ${r.actual_winner}</div>
+            </div>
+            <div style="text-align: right; margin-right: 12px;">
+                <div style="font-size: 13px; color: ${pickColor}; font-weight: 600;">Picked ${r.pick} (${r.confidence}%)</div>
+                <div style="font-size: 11px; color: var(--text2); margin-top: 2px;">${r.tier}</div>
+            </div>
+            <div class="result-icon ${cls}">${r.correct ? '✓' : '✗'}</div>
+        </div>`;
+    }).join('');
+}
+
+function renderResultSection(label, data) {
+    const results = data.results || [];
+    if (results.length === 0) return '';
+
+    let html = '';
+    const summary = data.summary;
+    const summaryText = summary && summary.total > 0
+        ? `<span style="font-family: 'JetBrains Mono'; font-weight: 700; font-size: 16px;">${summary.correct}/${summary.total} (${summary.accuracy}%)</span>`
+        : '';
+
+    html += `<div style="margin-bottom: 16px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; text-align: center;">
+        <span style="font-size: 14px; color: var(--text2);">${label}: </span>
+        ${summaryText}
+    </div>`;
+    html += renderResultCards(results);
+    return html;
+}
+
 async function loadResults() {
     try {
-        const resp = await fetch('/api/results/yesterday');
-        const data = await resp.json();
+        const [todayResp, yesterdayResp] = await Promise.all([
+            fetch('/api/results/today'),
+            fetch('/api/results/yesterday')
+        ]);
+        const todayData = await todayResp.json();
+        const yesterdayData = await yesterdayResp.json();
         document.getElementById('results-loading').style.display = 'none';
         resultsLoaded = true;
 
         const container = document.getElementById('results-container');
-        const results = data.results || [];
+        const todayResults = todayData.results || [];
+        const yesterdayResults = yesterdayData.results || [];
 
-        if (results.length === 0) {
+        if (todayResults.length === 0 && yesterdayResults.length === 0) {
             container.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>No results yet</div>`;
             return;
         }
 
-        const summary = data.summary;
         let html = '';
-        if (summary && summary.total > 0) {
-            html += `<div style="margin-bottom: 16px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; text-align: center;">
-                <span style="font-size: 14px; color: var(--text2);">Yesterday: </span>
-                <span style="font-family: 'JetBrains Mono'; font-weight: 700; font-size: 16px;">${summary.correct}/${summary.total} (${summary.accuracy}%)</span>
-            </div>`;
+        if (todayResults.length > 0) {
+            html += renderResultSection('Tonight', todayData);
         }
-
-        html += results.map(r => {
-            if (!r.predicted) {
-                return `<div class="result-card no-pred">
-                    <div><div class="result-matchup">${r.away} @ ${r.home}</div>
-                    <div class="result-score">${r.away_score} - ${r.home_score}</div></div>
-                    <div style="color: var(--text3); font-size: 12px;">No prediction</div>
-                </div>`;
+        if (yesterdayResults.length > 0) {
+            if (todayResults.length > 0) {
+                html += `<div style="height: 24px;"></div>`;
             }
-            const cls = r.correct ? 'correct' : 'wrong';
-            const pickColor = r.correct ? 'var(--green)' : 'var(--red)';
-            return `<div class="result-card ${cls}">
-                <div style="flex: 1;">
-                    <div class="result-matchup">${r.away} @ ${r.home}</div>
-                    <div class="result-score">Final: ${r.away_score} - ${r.home_score}  ·  Winner: ${r.actual_winner}</div>
-                </div>
-                <div style="text-align: right; margin-right: 12px;">
-                    <div style="font-size: 13px; color: ${pickColor}; font-weight: 600;">Picked ${r.pick} (${r.confidence}%)</div>
-                    <div style="font-size: 11px; color: var(--text2); margin-top: 2px;">${r.tier}</div>
-                </div>
-                <div class="result-icon ${cls}">${r.correct ? '✓' : '✗'}</div>
-            </div>`;
-        }).join('');
+            html += renderResultSection('Yesterday', yesterdayData);
+        }
 
         container.innerHTML = html;
     } catch (err) {
@@ -665,22 +692,28 @@ async function loadAccuracy() {
         accuracyLoaded = true;
 
         const container = document.getElementById('accuracy-container');
-        const overall = data.overall;
+        const allTime = data.all_time;
+        const lastSeason = data.last_season;
         const recent = data.recent_7d;
 
         // Update header
-        document.getElementById('header-record').textContent = `${overall.correct}/${overall.total}`;
-        document.getElementById('header-pct').textContent = overall.total > 0 ? `${overall.accuracy}%` : '—';
+        document.getElementById('header-record').textContent = allTime.total > 0 ? `${allTime.correct}/${allTime.total}` : '—';
+        document.getElementById('header-pct').textContent = allTime.total > 0 ? `${allTime.accuracy}%` : '—';
 
         let html = `<div class="accuracy-grid">
             <div class="acc-card">
                 <div class="acc-label">All Time</div>
-                <div class="acc-number" style="color: ${overall.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${overall.accuracy || '—'}%</div>
-                <div class="acc-sub">${overall.correct}/${overall.total}</div>
+                <div class="acc-number" style="color: ${allTime.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${allTime.total > 0 ? allTime.accuracy + '%' : '—'}</div>
+                <div class="acc-sub">${allTime.correct}/${allTime.total}</div>
+            </div>
+            <div class="acc-card">
+                <div class="acc-label">Last Season</div>
+                <div class="acc-number" style="color: ${lastSeason.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${lastSeason.total > 0 ? lastSeason.accuracy + '%' : '—'}</div>
+                <div class="acc-sub">${lastSeason.correct}/${lastSeason.total}</div>
             </div>
             <div class="acc-card">
                 <div class="acc-label">Last 7 Days</div>
-                <div class="acc-number" style="color: ${recent.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${recent.accuracy || '—'}%</div>
+                <div class="acc-number" style="color: ${recent.accuracy >= 55 ? 'var(--green)' : 'var(--text)'};">${recent.total > 0 ? recent.accuracy + '%' : '—'}</div>
                 <div class="acc-sub">${recent.correct}/${recent.total}</div>
             </div>
         </div>`;
@@ -794,7 +827,7 @@ async function calculateParlay() {
 loadTonight();
 // Also pre-load accuracy for the header badge
 fetch('/api/accuracy').then(r => r.json()).then(data => {
-    const o = data.overall;
+    const o = data.all_time;
     document.getElementById('header-record').textContent = o.total > 0 ? `${o.correct}/${o.total}` : '—';
     document.getElementById('header-pct').textContent = o.total > 0 ? `${o.accuracy}%` : '—';
 }).catch(() => {});

@@ -8,6 +8,7 @@ import numpy as np
 import requests
 import os
 import json
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 
@@ -82,8 +83,10 @@ def fetch_game_stats(game_id):
     box = rr = pbp = None
     try: box = requests.get(f"{API_BASE}/gamecenter/{game_id}/boxscore", timeout=15).json()
     except: pass
+    time.sleep(0.5)
     try: rr = requests.get(f"{API_BASE}/gamecenter/{game_id}/right-rail", timeout=15).json()
     except: pass
+    time.sleep(0.5)
     try: pbp = requests.get(f"{API_BASE}/gamecenter/{game_id}/play-by-play", timeout=15).json()
     except: pass
 
@@ -470,7 +473,7 @@ class NHLModel:
         acc = correct/total*100 if total > 0 else 0
         return {"accuracy": acc, "predictions": total, "correct": correct}
 
-    def ingest_current_season(self, base_lr=0.012):
+    def ingest_current_season(self, base_lr=0.012, data_dir="data"):
         """Pull completed current-season games from the NHL API.
 
         After training on historical CSVs, this fetches any games played
@@ -481,6 +484,9 @@ class NHLModel:
         Does NOT reset stats: the 2025-26 accumulated stats serve as a
         prior that gradually gets updated by new games. This is the right
         behavior for early season when sample size is small.
+
+        Caches ingested game IDs to disk so restarts skip already-processed
+        games. Rate-limits API calls to avoid 429 errors.
         """
         from datetime import date as date_type
 
@@ -501,7 +507,19 @@ class NHLModel:
             print("  Current season hasn't started yet.")
             return 0
 
+        # Load previously ingested game IDs
+        cache_path = os.path.join(data_dir, "ingested_games.json")
+        ingested_ids = set()
+        try:
+            if os.path.exists(cache_path):
+                with open(cache_path) as f:
+                    ingested_ids = set(json.load(f))
+                print(f"  Found {len(ingested_ids)} previously ingested games in cache.")
+        except Exception:
+            ingested_ids = set()
+
         games_ingested = 0
+        games_skipped = 0
         current = season_start
 
         print(f"  Ingesting current season: {season_start} to {yesterday}...")
@@ -511,9 +529,19 @@ class NHLModel:
             games = fetch_schedule(date_str)
             completed = [g for g in games if g["state"] in ["FINAL", "OFF"]]
 
+            time.sleep(0.6)  # pace schedule fetches
+
             for game in completed:
+                gid = game["game_id"]
+
+                # Skip already-ingested games
+                if str(gid) in ingested_ids or gid in ingested_ids:
+                    games_skipped += 1
+                    continue
+
                 try:
-                    stats = fetch_game_stats(game["game_id"])
+                    time.sleep(0.8)  # pace between games (each game = 3 API calls)
+                    stats = fetch_game_stats(gid)
                     if stats:
                         # Add fields that train_on_game expects
                         stats["home_team"] = game["home_team"]
@@ -525,13 +553,24 @@ class NHLModel:
                             game["away_team"], reference_date=current)
 
                         self.train_on_game(stats, base_lr=base_lr)
+                        ingested_ids.add(str(gid))
                         games_ingested += 1
                 except Exception as e:
-                    print(f"    Error ingesting game {game['game_id']}: {e}")
+                    print(f"    Error ingesting game {gid}: {e}")
 
             current += timedelta(days=1)
 
-        print(f"  Ingested {games_ingested} current-season games.")
+        # Save updated cache
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+            with open(cache_path, "w") as f:
+                json.dump(sorted(ingested_ids), f)
+        except Exception as e:
+            print(f"  Warning: could not save ingestion cache: {e}")
+
+        if games_skipped:
+            print(f"  Skipped {games_skipped} previously ingested games.")
+        print(f"  Ingested {games_ingested} new games ({len(ingested_ids)} total).")
         return games_ingested
 
     def get_rest_days(self, team, reference_date=None):

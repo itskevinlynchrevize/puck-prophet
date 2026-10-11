@@ -109,15 +109,26 @@ def initialize_model():
     # Pull completed 2026-27 games from the NHL API
     # This updates team stats, goalie names, rest days — all in one pass
     try:
-        games_ingested = model.ingest_current_season(base_lr=0.012)
+        games_ingested = model.ingest_current_season(base_lr=0.012, data_dir=DATA_DIR)
         if games_ingested > 0:
             print(f"  Current season: {games_ingested} games ingested.")
     except Exception as e:
         print(f"  Warning: Could not ingest current season: {e}")
 
     model.save_state(get_state_path())
-    load_predictions()
     load_accuracy()
+
+    # Clear today's cached predictions so they regenerate with fresh model data
+    today = eastern_today()
+    if today in predictions_cache:
+        del predictions_cache[today]
+        save_predictions()
+    else:
+        load_predictions()
+        if today in predictions_cache:
+            del predictions_cache[today]
+            save_predictions()
+
     print("  Model ready.")
 
 

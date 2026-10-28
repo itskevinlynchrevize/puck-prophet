@@ -2,7 +2,7 @@
 NHL Dashboard — Flask App
 """
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 from datetime import datetime, timedelta
 import os
 import json
@@ -349,6 +349,18 @@ def daily_refresh():
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")
+
+
+@app.route("/manifest.json")
+def manifest():
+    return send_from_directory("static", "manifest.json",
+                               mimetype="application/manifest+json")
+
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory("static", "sw.js",
+                               mimetype="application/javascript")
 
 
 @app.route("/api/predictions/today")

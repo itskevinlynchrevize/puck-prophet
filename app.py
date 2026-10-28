@@ -115,7 +115,7 @@ def initialize_model():
             season_accuracy[label] = {
                 "correct": result["correct"],
                 "total": result["predictions"],
-                "accuracy": result["accuracy"],
+                "accuracy": round(result["accuracy"], 1),
             }
 
     # Reset team/goalie stats so current season starts clean.
@@ -187,6 +187,9 @@ def daily_refresh():
 
     import pandas as pd
 
+    # Collect actual starters for goalie audit during ingestion
+    actual_starters = {}  # str(game_id) -> {home_starter_id, home_starter_name, ...}
+
     new_ingested = 0
     for game in completed:
         gid = game["game_id"]
@@ -202,6 +205,14 @@ def daily_refresh():
                 stats["date"] = pd.Timestamp(yesterday)
                 stats["home_rest"] = model.get_rest_days(game["home_team"])
                 stats["away_rest"] = model.get_rest_days(game["away_team"])
+
+                # Capture actual starters before training (for goalie audit)
+                actual_starters[str(gid)] = {
+                    "home_starter_id": stats.get("home_starter_id"),
+                    "home_starter_name": stats.get("home_starter_name", ""),
+                    "away_starter_id": stats.get("away_starter_id"),
+                    "away_starter_name": stats.get("away_starter_name", ""),
+                }
 
                 model.train_on_game(stats, base_lr=0.012)
                 ingested_ids.add(str(gid))
@@ -219,7 +230,7 @@ def daily_refresh():
 
     print(f"[CRON] Ingested {new_ingested} new games")
 
-    # ---- 2. Score yesterday's predictions ----------------
+    # ---- 2. Score yesterday's predictions (with goalie audit) ----
     already_logged = any(d["date"] == yesterday for d in accuracy_log)
 
     if not already_logged and completed:
@@ -228,6 +239,9 @@ def daily_refresh():
 
         day_correct = 0
         day_total = 0
+        goalie_mismatches = 0
+        picks_changed = 0
+
         for game in completed:
             gid = game["game_id"]
             if gid not in pred_map:
@@ -239,17 +253,76 @@ def daily_refresh():
 
             actual_winner = game["home_team"] if home_score > away_score else game["away_team"]
             pred = pred_map[gid]
-            if pred["pick"] == actual_winner:
+            scoring_pred = pred  # default: score the original prediction
+
+            # ---- Goalie audit ----
+            starters = actual_starters.get(str(gid))
+            if not starters:
+                # Game was already ingested on a previous run; fetch starters now
+                try:
+                    time.sleep(0.8)
+                    audit_stats = fetch_game_stats(gid)
+                    if audit_stats:
+                        starters = {
+                            "home_starter_id": audit_stats.get("home_starter_id"),
+                            "home_starter_name": audit_stats.get("home_starter_name", ""),
+                            "away_starter_id": audit_stats.get("away_starter_id"),
+                            "away_starter_name": audit_stats.get("away_starter_name", ""),
+                        }
+                except Exception:
+                    pass
+
+            if starters:
+                pred_home = pred.get("home_goalie_name", "Unknown")
+                pred_away = pred.get("away_goalie_name", "Unknown")
+                actual_home = starters.get("home_starter_name", "")
+                actual_away = starters.get("away_starter_name", "")
+
+                home_miss = (pred_home != actual_home
+                             and actual_home and pred_home != "Unknown")
+                away_miss = (pred_away != actual_away
+                             and actual_away and pred_away != "Unknown")
+
+                if home_miss or away_miss:
+                    goalie_mismatches += 1
+                    home_gid = starters.get("home_starter_id")
+                    away_gid = starters.get("away_starter_id")
+                    try:
+                        recalc = model.predict(
+                            game["home_team"], game["away_team"],
+                            pred.get("home_rest", 1), pred.get("away_rest", 1),
+                            home_gid, away_gid,
+                        )
+                        if recalc:
+                            if recalc["pick"] != pred["pick"]:
+                                picks_changed += 1
+                            scoring_pred = recalc
+                            print(f"[CRON] Goalie mismatch game {gid}: "
+                                  f"predicted {pred_home}/{pred_away}, "
+                                  f"actual {actual_home}/{actual_away}, "
+                                  f"recalc pick: {recalc['pick']}")
+                    except Exception as e:
+                        print(f"[CRON] Could not recalculate game {gid}: {e}")
+
+            if scoring_pred["pick"] == actual_winner:
                 day_correct += 1
             day_total += 1
 
+        if goalie_mismatches > 0:
+            print(f"[CRON] Goalie audit: {goalie_mismatches} mismatch(es), "
+                  f"{picks_changed} pick(s) changed after recalculation")
+
         if day_total > 0:
-            accuracy_log.append({
+            log_entry = {
                 "date": yesterday,
                 "correct": day_correct,
                 "total": day_total,
                 "accuracy": round(day_correct / day_total * 100, 1),
-            })
+            }
+            if goalie_mismatches > 0:
+                log_entry["goalie_mismatches"] = goalie_mismatches
+                log_entry["picks_changed"] = picks_changed
+            accuracy_log.append(log_entry)
             save_accuracy()
             print(f"[CRON] Accuracy logged for {yesterday}: {day_correct}/{day_total}")
         else:
